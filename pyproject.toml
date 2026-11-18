@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qfex2"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.0.0"
+description = "Python SDK for the QFEX API"
 readme = "README.md"
 requires-python = ">=3.12"
+license = {text = "MIT"}
 dependencies = [
     "requests>=2.34.2",
     "websockets>=16.1",

@@ -1,0 +1,26 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+.python-version
+
+# Virtual environments
+.venv
+
+# editor settings
+.vscode/
+user_settings.json
+ruff.toml
+
+# other folders and files
+logs/
+
+# macOS folder metadata
+.DS_Store
+
+# local backups
+*.bak-*

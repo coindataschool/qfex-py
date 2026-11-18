@@ -1,11 +1,28 @@
 # qfex2
 
-A modern, high-performance Python SDK for the [QFEX](https://qfex.com) API.
+A Python SDK for the [QFEX](https://qfex.com) API. The `examples/bot_supervisor.py`
+is a pure market making bot that you can run out of the box or with customization.
+By default, it continuously quotes both a buy (bid) and a sell (ask) price for
+US500 around a mid-price, aiming to capture the bid–ask spread without taking a
+directional bet.
 
-![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
+![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-## Features
+## Disclaimers
+
+This package is written by AI and backtested under my supervision. After two
+months of tinkering, I'm releasing it as version 1.0.0. The `examples/bot_supervisor.py`
+contains the settings I currently use, so if you just want to passively farming
+QFEX points on autopilot, you can just run:
+
+```bash
+caffeinate -i .venv/bin/python examples/bot_supervisor.py
+```
+
+Of course, you will need to create an account at QFEX first. You can do that with
+my referral [https://qfex.com/@re83f92f](https://qfex.com/@re83f92f) to save
+10%+ on trading fees.
 
 ## Installation
 
@@ -25,6 +42,9 @@ pip install .
 
 ## Quick Start
 
+Create an account at [QFEX](https://qfex.com/@re83f92f) and deposit \$50~\$200.
+(You can deposit more later after you feel comfortable with the bot.)
+
 Get your QFEX API keys. See [instruction](https://docs.qfex.com/api-reference/introduction).
 
 Store your keys in env vars by adding the following lines to the right startup
@@ -34,6 +54,28 @@ file (`~/.zprofile`, `~/.profile`, `~/.zshrc`, `~/.bashrc`) for your shell:
 export QFEX_PUBLIC_KEY="your_public_key"
 export QFEX_SECRET_KEY="your_secret_key" 
 ```
+
+Run pure market making bots:
+
+```bash
+caffeinate -i .venv/bin/python examples/bot_supervisor.py
+```
+
+`examples/bot_supervisor.py` runs one bot at a time on a daily schedule, with
+pauses around news releases, the US stock-market open and weekends. All of its
+times are in UTC by default (`TIMEZONE = "UTC"`). To use your own timezone, set
+`TIMEZONE` to an IANA name such as `"Europe/London"` and convert the schedule,
+blackouts, weekend pause and week start to it. The shipped schedule, sizes and
+blackout dates are the author's own settings for late 2026 — review and replace
+them before running with real money. (`caffeinate` keeps a Mac awake; on Linux
+just run `python examples/bot_supervisor.py`.)
+
+## Build Your Own Bots
+
+The `examples/` folder contains several other scripts, each implementing a simple
+strategy. These scripts are meant to demonstrate the features of the `qfex2`
+package, and are not necessarily good trading strategies. You can use them as
+starting points to build your own bots.
 
 Run simple maker stratey to place GTC Add Liquidity Orders:
 
@@ -136,27 +178,13 @@ python examples/perpetual_maker.py \
     --log-file logs/mm.log
 ```
 
-Run a pure market making bot:
-
-```bash
-caffeinate -i .venv/bin/python examples/bot_supervisor.py
-```
-
-`examples/bot_supervisor.py` runs one bot at a time on a daily schedule, with
-pauses around news releases, the US stock-market open and weekends. All of its
-times are in UTC by default (`TIMEZONE = "UTC"`). To use your own timezone, set
-`TIMEZONE` to an IANA name such as `"Europe/London"` and convert the schedule,
-blackouts, weekend pause and week start to it. The shipped schedule, sizes and
-blackout dates are the author's own settings for late 2026 — review and replace
-them before running with real money. (`caffeinate` keeps a Mac awake; on Linux
-just run `python examples/bot_supervisor.py`.)
-
 Hint: change `INFO` to `DEBUG`, `WARNING`, `ERROR`, `CRITICAL` for details.
 
 ## Requirements
 
-* Python 3.10+
+* Python 3.12+
 * `websockets`
+* `requests`
 
 ## License
 

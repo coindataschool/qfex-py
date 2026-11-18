@@ -24,6 +24,15 @@ Of course, you will need to create an account at QFEX first. You can do that wit
 my referral [https://qfex.com/@re83f92f](https://qfex.com/@re83f92f) to save
 10%+ on trading fees.
 
+This software is provided "as is," without warranty of any kind, express or implied.
+It is intended for educational and informational purposes only and does not
+constitute financial, investment, or trading advice. Trading and investing involve
+significant risk, and you may incur capital losses. Never risk money you cannot
+afford to lose. By downloading, installing, or using this package, you agree that
+the authors, publishers, and contributors are not liable for any financial losses,
+damages, or technical issues resulting from its use. You use this software entirely
+at your own risk.
+
 ## Installation
 
 Install via pip:

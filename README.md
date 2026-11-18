@@ -1,6 +1,6 @@
 # qfex2
 
-A Python SDK for the [QFEX](https://qfex.com) API. The `examples/bot_supervisor.py`
+A Python SDK for the [QFEX](https://docs.qfex.com/api-reference/introduction) API. The `examples/bot_supervisor.py`
 is a pure market making bot that you can run out of the box or with customization.
 By default, it continuously quotes both a buy (bid) and a sell (ask) price for
 US500 around a mid-price, aiming to capture the bid–ask spread without taking a

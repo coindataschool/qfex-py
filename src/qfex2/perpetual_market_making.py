@@ -526,6 +526,17 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
         self._exit_guard_pos: Optional[Decimal] = None
         self._exit_guard_until: float = 0.0
 
+        # Fill fence (added 2026-11-22). QFEX sends the position_response
+        # 10-215 ms after a fill (looks like a ~200 ms timer). Until it arrives
+        # get_position() still shows the old position, so a flat strategy could
+        # re-place the quote that just filled and double the position (live:
+        # US500 Nov 18 22:36 and Nov 21 00:10 — position 0.14 with order_amount
+        # 0.07, then trimmed with a MARKET order). When one of our quotes fills,
+        # the strategy records the position it now expects; until the exchange's
+        # position equals it (or FILL_FENCE_S passes) it places no quotes.
+        self._fill_fence_pos: Optional[Decimal] = None
+        self._fill_fence_until: float = 0.0
+
         # Drain mode (added 2026-10-14). Set by drain_until_flat() when the
         # runner receives SIGUSR1 (sent by examples/bot_supervisor.py at a
         # scheduled switch). While draining, a FLAT strategy cancels its
@@ -619,6 +630,7 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
     async def on_fill(self, fill: Dict[str, Any]) -> None:
         self.log_fill(fill)
         self._record_taker_fill(fill)
+        self._note_quote_fill(fill)
         # No bookkeeping beyond logging here deliberately — order_id ->
         # None transitions on a filled quote/stop/take-profit are handled
         # by _tick() re-deriving live state from self.client.positions and
@@ -865,6 +877,12 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
         position = self.client.get_position(self.symbol)
         if position.position == 0:
             self._exit_guard_pos = None
+            if self._fill_fence_active():
+                # A quote just filled but the exchange hasn't reported the new
+                # position yet: act as if holding it — pull the other quote and
+                # place nothing until the position_response arrives.
+                self._cancel_quotes_in_background()
+                return
             await self._await_bg_quote_cancel()
             # Flat: not managing anything — if a stop/take-profit order is
             # still resting from a position that has since closed (e.g.
@@ -918,6 +936,50 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
                 await self._cancel_quotes_if_any()
 
     EXIT_GUARD_S = 3.0
+
+    FILL_FENCE_S = 2.0   # fallback if the position_response never matches
+
+    def _note_quote_fill(self, fill: Dict[str, Any]) -> None:
+        """On a fill of one of our resting quotes: arm the fill fence with the
+        position we now expect, and forget the quote if it filled completely."""
+        try:
+            oid = fill.get("order_id")
+            if oid is None or oid not in (self.bid_order_id, self.ask_order_id):
+                return
+            orsp = fill["order_response"]
+            delta = Decimal(str(fill["filled_qty_delta"]))
+            signed = delta if orsp.get("side") == "BUY" else -delta
+            exch = self.client.get_position(self.symbol).position
+            base = self._fill_fence_pos if self._fill_fence_active() else exch
+            self._fill_fence_pos = base + signed
+            self._fill_fence_until = time.monotonic() + self.FILL_FENCE_S
+            rem = orsp.get("quantity_remaining")
+            if rem is not None and Decimal(str(rem)) <= 0:
+                if oid == self.bid_order_id:
+                    self.bid_order_id, self.bid_price = None, None
+                else:
+                    self.ask_order_id, self.ask_price = None, None
+            self.client.log.info(
+                "fill fence: quote %s filled %s, expecting position %s (exchange still shows %s) "
+                "— no new quotes until it matches", oid, signed, self._fill_fence_pos, exch)
+        except Exception:
+            self.client.log.exception("fill fence bookkeeping failed")
+
+    def _fill_fence_active(self) -> bool:
+        """True while a quote fill is not yet reflected in the exchange's position."""
+        if self._fill_fence_pos is None:
+            return False
+        pos = self.client.get_position(self.symbol).position
+        if pos == self._fill_fence_pos:
+            self._fill_fence_pos = None
+            return False
+        if time.monotonic() >= self._fill_fence_until:
+            self.client.log.warning(
+                "fill fence expired after %.1f s: exchange position %s, expected %s",
+                self.FILL_FENCE_S, pos, self._fill_fence_pos)
+            self._fill_fence_pos = None
+            return False
+        return True
 
     BBO_CLOSE_SKIP_LOG_S = 10.0
 
@@ -1739,7 +1801,12 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
             return
 
         if self._quotes_are_stale(active_price, desired_price):
-            await self._cancel_side(side)
+            status = await self._cancel_side(side)
+            if status not in ("CANCELLED", "CANCELLED_STP"):
+                # NO_SUCH_ORDER: the quote most likely just filled — do not
+                # replace it in the same tick (2026-11-22, see the fill fence).
+                # Cancel failed / timed out: the old order may still rest.
+                return
             await self._place_quote(side, desired_price, active_order_id_attr, active_price_attr)
         # else: within tolerance — leave the resting order alone. This is
         # Hummingbot's order_refresh_tolerance_pct: avoids cancel/replace
@@ -1760,6 +1827,9 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
         active_price_attr: str,
     ) -> None:
         label = "BID" if side == Side.BUY else "ASK"
+        if self._fill_fence_active():
+            self.client.log.debug("%s not placed: fill fence active", label)
+            return
         try:
             result = await self.client.send_gtc_alo(
                 symbol=self.symbol,
@@ -1809,20 +1879,21 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
             # tick.
             self.client.log.warning("%s not resting: status=%s resp=%s", label, status, orsp)
 
-    async def _cancel_side(self, side: Side) -> None:
+    async def _cancel_side(self, side: Side) -> Optional[str]:
         order_id_attr = "bid_order_id" if side == Side.BUY else "ask_order_id"
         price_attr = "bid_price" if side == Side.BUY else "ask_price"
         label = "BID" if side == Side.BUY else "ASK"
         order_id = getattr(self, order_id_attr)
         if order_id is None:
-            return
+            return "CANCELLED"
         try:
             result = await self.client.cancel_order(order_id, self.symbol)
+            status = result["final_order_response"].get("status")
             self.client.log.info(
                 "%s cancelled: order_id=%s status=%s",
                 label,
                 order_id,
-                result["final_order_response"].get("status"),
+                status,
             )
         except asyncio.TimeoutError:
             self.client.log.error(
@@ -1833,7 +1904,7 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
                 label,
                 order_id,
             )
-            return
+            return None
         except QFEXTradeError as e:
             # Already-safe before this except existed too (the bare
             # `except Exception` below would have caught it), but this
@@ -1852,14 +1923,15 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
                 e,
                 e.err.get("error_code"),
             )
-            return
+            return None
         except Exception:
             self.client.log.exception(
                 "%s cancel_order failed for order_id=%s", label, order_id
             )
-            return
+            return None
         setattr(self, order_id_attr, None)
         setattr(self, price_attr, None)
+        return status
 
     async def _cancel_quotes_if_any(self) -> None:
         await self._await_bg_quote_cancel()

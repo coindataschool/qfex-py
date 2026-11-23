@@ -97,10 +97,8 @@ async def test_partial_fills_accumulate_and_keep_order():
     assert s.bid_order_id == "bid-1" and s._fill_fence_pos == Decimal("0.004")
     await s.on_fill(fill("bid-1", "BUY", 0.006, 0.0))
     assert s.bid_order_id is None and s._fill_fence_pos == Decimal("0.010")
-    c.positions[SYM].position = Decimal("0.004")             # first update only: still fenced
-    assert s._fill_fence_active()
-    c.positions[SYM].position = Decimal("0.010")
-    assert not s._fill_fence_active()
+    c.positions[SYM].position = Decimal("0.004")             # exchange moved: fill reported, fence lifts
+    assert not s._fill_fence_active()                        # (bot is in position now, so no quoting anyway)
 
 
 async def test_fence_expires_as_fallback():
@@ -116,6 +114,33 @@ async def test_other_fills_do_not_arm_fence():
     s, c = setup()
     await s.on_fill(fill("market-exit-7", "BUY", 0.01, 0.0))
     assert s._fill_fence_pos is None and s.bid_order_id == "bid-1" and s.ask_order_id == "ask-1"
+
+
+async def test_quick_round_trip_does_not_leave_fence_up():
+    # 2026-11-23: entry fill, exchange reports -0.01, exit back to 0 within 2 s
+    s, c = setup()
+    await s.on_fill(fill("ask-1", "SELL", 0.01, 0.0))
+    bbo = BBO(symbol=SYM, bid_px=Decimal("4000"), bid_qty=Decimal("1"), ask_px=Decimal("4000.1"), ask_qty=Decimal("1"))
+    c.positions[SYM].position = Decimal("-0.01")             # position_response; a tick sees the position
+    s._manage_position = lambda *a, **k: asyncio.sleep(0)
+    s._trim_excess_position = lambda *a, **k: asyncio.sleep(0)
+    await s._tick(bbo)
+    assert s._fill_fence_pos is None                         # lifted while in position
+    c.positions[SYM].position = Decimal("0")                 # closed again (TP) well within 2 s
+    assert not s._fill_fence_active()
+    await s._refresh_quote_if_stale(Side.SELL, Decimal("4002"), "ask_order_id", "ask_price")
+    assert s.placed == [(Side.SELL, Decimal("4002"))]        # quoting resumes at once
+
+
+async def test_position_update_mid_tick_still_blocks_replace():
+    # Nov 18 order of events: fill .651, position_response -0.07 at .727, then the
+    # in-progress tick's cancel answer (.752) and its re-place
+    s, c = setup()
+    await s.on_fill(fill("ask-1", "SELL", 0.01, 0.0))
+    c.positions[SYM].position = Decimal("-0.01")             # fence lifts (exchange moved)
+    assert not s._fill_fence_active()
+    await s._place_quote(Side.SELL, Decimal("4003"), "ask_order_id", "ask_price")
+    assert s.placed == []                                    # but no quote while a position is open
 
 
 if __name__ == "__main__":

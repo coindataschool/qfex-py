@@ -535,7 +535,13 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
         # the strategy records the position it now expects; until the exchange's
         # position equals it (or FILL_FENCE_S passes) it places no quotes.
         self._fill_fence_pos: Optional[Decimal] = None
+        self._fill_fence_base: Decimal = Decimal("0")   # exchange position when armed
         self._fill_fence_until: float = 0.0
+        # 2026-11-23: the fence lifts as soon as the exchange position moves away
+        # from its value at arming (not only when it equals the expected value),
+        # and it is checked on every tick. Before, a trip that opened and closed
+        # within 2 s left the fence up after the exit (position back to the old
+        # value), blocking new quotes until the 2 s fallback (26 of 35 trips).
 
         # Drain mode (added 2026-10-14). Set by drain_until_flat() when the
         # runner receives SIGUSR1 (sent by examples/bot_supervisor.py at a
@@ -875,9 +881,10 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
         paused = self._update_pause_state(reason)
 
         position = self.client.get_position(self.symbol)
+        fenced = self._fill_fence_active()   # every tick, so it lifts as soon as the position moves
         if position.position == 0:
             self._exit_guard_pos = None
-            if self._fill_fence_active():
+            if fenced:
                 # A quote just filled but the exchange hasn't reported the new
                 # position yet: act as if holding it — pull the other quote and
                 # place nothing until the position_response arrives.
@@ -950,7 +957,11 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
             delta = Decimal(str(fill["filled_qty_delta"]))
             signed = delta if orsp.get("side") == "BUY" else -delta
             exch = self.client.get_position(self.symbol).position
-            base = self._fill_fence_pos if self._fill_fence_active() else exch
+            if self._fill_fence_active():
+                base = self._fill_fence_pos
+            else:
+                base = exch
+                self._fill_fence_base = exch
             self._fill_fence_pos = base + signed
             self._fill_fence_until = time.monotonic() + self.FILL_FENCE_S
             rem = orsp.get("quantity_remaining")
@@ -970,8 +981,8 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
         if self._fill_fence_pos is None:
             return False
         pos = self.client.get_position(self.symbol).position
-        if pos == self._fill_fence_pos:
-            self._fill_fence_pos = None
+        if pos == self._fill_fence_pos or pos != self._fill_fence_base:
+            self._fill_fence_pos = None      # the exchange has reported the fill
             return False
         if time.monotonic() >= self._fill_fence_until:
             self.client.log.warning(
@@ -1829,6 +1840,10 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
         label = "BID" if side == Side.BUY else "ASK"
         if self._fill_fence_active():
             self.client.log.debug("%s not placed: fill fence active", label)
+            return
+        if self.client.get_position(self.symbol).position != 0:
+            # a tick that started flat but the position_response has arrived since
+            self.client.log.debug("%s not placed: position open", label)
             return
         try:
             result = await self.client.send_gtc_alo(

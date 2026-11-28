@@ -90,6 +90,17 @@ async def test_unchanged_position_places_nothing_new():
     assert len(c.placed) == 2 and c.cancelled == []
 
 
+
+async def test_no_trigger_log_file():
+    # 2026-11-28: perpetual_maker.py passes trigger_log_file=None -> no file, stop legs still placed
+    s, c = setup([False])
+    s.trigger_logger = None
+    await s._manage_position(B, Decimal("0.07"), AVG)
+    assert live_qty(c, "SL") == live_qty(c, "TP") == Decimal("0.07"), c.placed
+    from qfex2.perpetual_market_making import PerpetualMarketMakingStrategy
+    s2 = PerpetualMarketMakingStrategy(c, "GOLD-USD", s.cfg)          # no trigger_log_file at all
+    assert s2.trigger_logger is None
+
 if __name__ == "__main__":
     import sys
     fails = 0

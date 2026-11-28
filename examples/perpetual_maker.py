@@ -216,15 +216,9 @@ async def main() -> None:
     root, ext = os.path.splitext(args.log_file)
     log_file = f"{root}_{run_started_at}{ext}"
 
-    # trigger_log_file: no separate CLI flag — always
-    # "<dir of --log-file>/triggers_<run_started_at>.jsonl", fixed
-    # filename, not user-configurable (there's no real case for wanting
-    # this named differently run to run), sharing the same directory and
-    # timestamp as the main log file.
     log_dir = os.path.dirname(args.log_file)
     if log_dir == "":
         log_dir = "."
-    trigger_log_file = os.path.join(log_dir, f"triggers_{run_started_at}.jsonl")
 
     setup_logging(
         args.log_level,
@@ -268,7 +262,7 @@ async def main() -> None:
         client,
         symbol=args.symbol,
         cfg=strategy_cfg,
-        trigger_log_file=trigger_log_file,
+        trigger_log_file=None,   # 2026-11-28: no triggers_*.jsonl any more (see strategy)
         # one file across runs (not per run): the supervisor sums it per week
         taker_ledger_file=os.path.join(log_dir, "taker_fills.jsonl"),
         pnl_ledger_file=os.path.join(log_dir, "pnl_ledger.jsonl"),

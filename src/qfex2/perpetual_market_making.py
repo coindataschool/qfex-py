@@ -337,14 +337,14 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
         # so a None here means a direct/programmatic construction forgot
         # it — worth failing loudly rather than silently writing to a
         # hardcoded default path.
-        if trigger_log_file is None:
-            raise ValueError(
-                "trigger_log_file is required — pass trigger_log_file= "
-                "when constructing PerpetualMarketMakingStrategy (see "
-                "perpetual_maker.py for how it's normally derived from "
-                "--log-file)"
-            )
-        self.trigger_logger = TriggerLogger(out_path=trigger_log_file)
+        # 2026-11-28: optional. None (now the default from perpetual_maker.py)
+        # writes no trigger file — the main log already records every stop /
+        # take-profit ACK (order_id, trigger) and QFEX's triggered fills carry
+        # client_order_id "stop-order-<that order_id>", so exits can be matched
+        # to their leg without it.
+        self.trigger_logger: Optional[TriggerLogger] = (
+            TriggerLogger(out_path=trigger_log_file) if trigger_log_file else None
+        )
 
         # --- Quoting-mode state (position == 0) ---
         self.bid_order_id: Optional[str] = None
@@ -2505,17 +2505,18 @@ class PerpetualMarketMakingStrategy(TraderStrategy):
                     trigger_price,
                     exit_qty,
                 )
-                self.trigger_logger.log_trigger_ack(
-                    label=label,
-                    symbol=self.symbol,
-                    exit_side=str(exit_side),
-                    order_id=orsp.get("order_id"),
-                    client_order_id=client_oid,
-                    trigger_price=trigger_price,
-                    exit_qty=exit_qty,
-                    average_price=average_price,
-                    ts=time.time(),
-                )
+                if self.trigger_logger is not None:
+                    self.trigger_logger.log_trigger_ack(
+                        label=label,
+                        symbol=self.symbol,
+                        exit_side=str(exit_side),
+                        order_id=orsp.get("order_id"),
+                        client_order_id=client_oid,
+                        trigger_price=trigger_price,
+                        exit_qty=exit_qty,
+                        average_price=average_price,
+                        ts=time.time(),
+                    )
             else:
                 self.client.log.warning(
                     "%s not resting: status=%s resp=%s", label, orsp.get("status"), orsp
